@@ -96,6 +96,11 @@ try {
         "SELECT DISTINCT symbol FROM crypto.ingest_cursors WHERE endpoint = 'account_trades'",
         $candidateSymbols
     );
+    load_symbol_column(
+        $db,
+        "SELECT symbol FROM crypto.ingest_symbol_watchlist WHERE enabled = 1",
+        $candidateSymbols
+    );
 
     for ($i = 1; $i < $argc; $i++) {
         add_symbol($candidateSymbols, $argv[$i]);
