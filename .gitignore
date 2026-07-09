@@ -1,0 +1,45 @@
+# Secrets / environment files
+.env
+*.env
+config.php
+secrets.php
+*secret*
+*password*
+*credentials*
+*.key
+*.pem
+
+# Local test/debug files
+test-*.php
+debug-*.php
+*_test.php
+phpinfo.php
+
+# Logs / runtime files
+*.log
+logs/
+tmp/
+cache/
+sessions/
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Dependencies
+node_modules/
+
+# Keep vendor decision intentional:
+# If this app relies on a committed vendor folder, do not ignore vendor yet.
+# vendor/
+# Old backups / notes that may contain credentials
+backup/
+*.jfif
+
+notes.php
+bapi2-bu.php
+bapi.php
+composer.phar
+
