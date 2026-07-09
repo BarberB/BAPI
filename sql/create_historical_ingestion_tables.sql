@@ -171,3 +171,18 @@ CREATE TABLE IF NOT EXISTS `api_errors` (
     FOREIGN KEY (`symbol`) REFERENCES `symbols` (`symbol`)
     ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `ingest_symbol_watchlist` (
+  `watchlist_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `symbol` VARCHAR(32) NOT NULL,
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `reason` VARCHAR(255) NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`watchlist_id`),
+  UNIQUE KEY `uq_ingest_symbol_watchlist_symbol` (`symbol`),
+  KEY `idx_ingest_symbol_watchlist_enabled_symbol` (`enabled`, `symbol`),
+  CONSTRAINT `fk_ingest_symbol_watchlist_symbol`
+    FOREIGN KEY (`symbol`) REFERENCES `symbols` (`symbol`)
+    ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
