@@ -43,3 +43,10 @@ bapi2-bu.php
 bapi.php
 composer.phar
 
+# Adobe Dreamweaver local/project files
+_notes/
+dwsync.xml
+*.mno
+.ste
+.dw/
+
