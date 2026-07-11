@@ -70,6 +70,67 @@ function load_watchlist_symbols($db)
     return $symbols;
 }
 
+function parse_worker_summary($summary)
+{
+    $fields = [];
+    if (preg_match_all('/([a-z_]+)=([^,\\s]+)/', $summary, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $match) {
+            $fields[$match[1]] = $match[2];
+        }
+    }
+
+    return $fields;
+}
+
+function run_worker($scriptPath, $args)
+{
+    $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($scriptPath);
+
+    foreach ($args as $arg) {
+        $command .= ' ' . escapeshellarg((string) $arg);
+    }
+
+    $output = [];
+    $exitCode = 0;
+    exec($command, $output, $exitCode);
+
+    $summary = trim(implode("\n", $output));
+    if ($summary !== '') {
+        echo $summary . "\n";
+    }
+
+    return [$exitCode, $summary, parse_worker_summary($summary)];
+}
+
+function kline_stop_reason($fields, $exitCode)
+{
+    if ($exitCode !== 0) {
+        return 'worker_exit_nonzero';
+    }
+
+    if (($fields['status'] ?? '') === 'failed') {
+        return 'worker_status_failed';
+    }
+
+    $klines = isset($fields['klines']) ? (int) $fields['klines'] : 0;
+    $inserted = isset($fields['inserted']) ? (int) $fields['inserted'] : 0;
+    $updated = isset($fields['updated']) ? (int) $fields['updated'] : 0;
+
+    if ($klines === 0) {
+        return 'no_klines';
+    }
+
+    if ($inserted === 0 && $updated === 0) {
+        return 'no_changes';
+    }
+
+    if ($klines < 1000) {
+        return 'partial_page';
+    }
+
+    return null;
+}
+
 for ($i = 1; $i < $argc; $i++) {
     $arg = trim($argv[$i]);
 
@@ -111,40 +172,127 @@ try {
     }
 
     $symbols = load_watchlist_symbols($db);
-    $workerScript = __DIR__ . DIRECTORY_SEPARATOR . ($catchup ? 'catchup_market_klines.php' : 'sync_market_klines.php');
+    $workerScript = __DIR__ . DIRECTORY_SEPARATOR . 'sync_market_klines.php';
 
-    foreach ($symbols as $symbol) {
-        foreach ($intervals as $interval) {
-            $command = escapeshellarg(PHP_BINARY) . ' ' .
-                escapeshellarg($workerScript) . ' ' .
-                escapeshellarg($symbol) . ' ' .
-                escapeshellarg($interval);
+    if (!$catchup) {
+        foreach ($symbols as $symbol) {
+            foreach ($intervals as $interval) {
+                [$exitCode, $summary] = run_worker($workerScript, [$symbol, $interval]);
 
-            if ($catchup) {
-                $command .= ' ' . escapeshellarg((string) $maxRuns);
+                if ($exitCode === 0 && strpos($summary, 'status=failed') === false) {
+                    $completed++;
+                } else {
+                    $failed++;
+                }
+
+                usleep(250000);
             }
-
-            $output = [];
-            $exitCode = 0;
-            exec($command, $output, $exitCode);
-            $summary = trim(implode("\n", $output));
-
-            if ($summary !== '') {
-                echo $summary . "\n";
-            }
-
-            if ($exitCode === 0 && strpos($summary, 'status=failed') === false) {
-                $completed++;
-            } else {
-                $failed++;
-            }
-
-            usleep(250000);
         }
-    }
+    } else {
+        // In active catch-up mode, --max-runs is the maximum number of round-robin
+        // passes. Each pass gives every still-behind symbol/interval one kline batch.
+        $jobs = [];
+        foreach ($symbols as $symbol) {
+            foreach ($intervals as $interval) {
+                $key = $symbol . ':' . $interval;
+                $jobs[$key] = [
+                    'symbol' => $symbol,
+                    'interval' => $interval,
+                    'runs_attempted' => 0,
+                    'runs_completed' => 0,
+                    'caught_up' => false,
+                    'failed' => false,
+                    'stop_reason' => 'not_started',
+                    'status' => 'pending',
+                ];
+            }
+        }
 
-    if ($failed > 0) {
-        $status = 'completed_with_errors';
+        $passesAttempted = 0;
+        $batchesAttempted = 0;
+        $overallStopReason = 'all_caught_up';
+        for ($pass = 1; $pass <= $maxRuns; $pass++) {
+            $hasPendingJob = false;
+            foreach ($jobs as $job) {
+                if (!$job['caught_up'] && !$job['failed']) {
+                    $hasPendingJob = true;
+                    break;
+                }
+            }
+
+            if (!$hasPendingJob) {
+                $overallStopReason = 'all_caught_up';
+                break;
+            }
+
+            $passesAttempted++;
+
+            foreach ($jobs as $key => $job) {
+                if ($job['caught_up'] || $job['failed']) {
+                    continue;
+                }
+
+                $jobs[$key]['runs_attempted']++;
+                $batchesAttempted++;
+                $workerResult = run_worker($workerScript, [$job['symbol'], $job['interval']]);
+                $exitCode = $workerResult[0];
+                $fields = $workerResult[2];
+                $stopReason = kline_stop_reason($fields, $exitCode);
+
+                if ($exitCode === 0 && ($fields['status'] ?? '') !== 'failed') {
+                    $jobs[$key]['runs_completed']++;
+                    $completed++;
+                } else {
+                    $jobs[$key]['failed'] = true;
+                    $jobs[$key]['status'] = 'failed';
+                    $jobs[$key]['stop_reason'] = $stopReason;
+                    $failed++;
+                    $status = 'failed';
+                    $overallStopReason = $stopReason;
+                    break 2;
+                }
+
+                if ($stopReason !== null) {
+                    $jobs[$key]['caught_up'] = true;
+                    $jobs[$key]['status'] = 'completed';
+                    $jobs[$key]['stop_reason'] = $stopReason;
+                } else {
+                    $jobs[$key]['status'] = 'behind';
+                    $jobs[$key]['stop_reason'] = 'full_page';
+                }
+
+                usleep(250000);
+            }
+        }
+
+        if ($overallStopReason === 'all_caught_up') {
+            foreach ($jobs as $job) {
+                if (!$job['caught_up'] && !$job['failed']) {
+                    $overallStopReason = 'max_passes_reached';
+                    break;
+                }
+            }
+        }
+
+        $caughtUp = 0;
+        $stillBehind = 0;
+        foreach ($jobs as $job) {
+            if ($job['caught_up']) {
+                $caughtUp++;
+            } elseif (!$job['failed']) {
+                $stillBehind++;
+            }
+
+            echo "sync_active_market_klines_symbol: symbol={$job['symbol']}, interval={$job['interval']}, runs_attempted={$job['runs_attempted']}, runs_completed={$job['runs_completed']}, caught_up=" .
+                ($job['caught_up'] ? 'yes' : 'no') .
+                ", stop_reason={$job['stop_reason']}, status={$job['status']}\n";
+        }
+
+        if ($failed > 0) {
+            $status = 'failed';
+        } elseif ($stillBehind > 0) {
+            $status = 'completed_with_backlog';
+        }
     }
 } catch (Throwable $e) {
     $status = 'failed';
@@ -155,4 +303,18 @@ $runtime = round(microtime(true) - $startTime, 2);
 $symbolCount = isset($symbols) ? count($symbols) : 0;
 $intervalCount = count($intervals);
 
-echo "sync_active_market_klines: symbols={$symbolCount}, intervals={$intervalCount}, completed={$completed}, failed={$failed}, runtime={$runtime}s, status={$status}\n";
+if ($catchup) {
+    $passesAttempted = isset($passesAttempted) ? $passesAttempted : 0;
+    $batchesAttempted = isset($batchesAttempted) ? $batchesAttempted : 0;
+    $caughtUp = isset($caughtUp) ? $caughtUp : 0;
+    $stillBehind = isset($stillBehind) ? $stillBehind : 0;
+    $overallStopReason = isset($overallStopReason) ? $overallStopReason : 'fatal_error';
+
+    echo "sync_active_market_klines: mode=catchup, max_runs_semantics=passes, symbols={$symbolCount}, intervals={$intervalCount}, passes_attempted={$passesAttempted}, total_symbol_batches_attempted={$batchesAttempted}, total_symbol_batches_completed={$completed}, total_symbol_batches_failed={$failed}, symbols_caught_up={$caughtUp}, symbols_still_behind={$stillBehind}, overall_stop_reason={$overallStopReason}, runtime={$runtime}s, status={$status}\n";
+} else {
+    if ($failed > 0 && $status !== 'failed') {
+        $status = 'completed_with_errors';
+    }
+
+    echo "sync_active_market_klines: symbols={$symbolCount}, intervals={$intervalCount}, completed={$completed}, failed={$failed}, runtime={$runtime}s, status={$status}\n";
+}
