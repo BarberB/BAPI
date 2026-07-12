@@ -102,6 +102,28 @@ CREATE TABLE IF NOT EXISTS `balance_snapshots` (
   KEY `idx_balance_snapshots_asset` (`asset`, `snapshot_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `portfolio_snapshot_valuations` (
+  `account_type` VARCHAR(32) NOT NULL DEFAULT 'SPOT',
+  `snapshot_time` BIGINT UNSIGNED NOT NULL,
+  `estimated_value_usdt` DECIMAL(38,18) NOT NULL DEFAULT 0,
+  `stablecoin_value_usdt` DECIMAL(38,18) NOT NULL DEFAULT 0,
+  `valued_asset_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `total_nonzero_asset_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `missing_asset_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `coverage_percentage` DECIMAL(9,6) NOT NULL DEFAULT 0,
+  `fresh_price_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `aging_price_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `stale_price_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `missing_price_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `missing_assets` JSON NULL,
+  `price_sources` JSON NULL,
+  `calculation_version` VARCHAR(64) NOT NULL,
+  `calculated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`account_type`, `snapshot_time`),
+  KEY `idx_portfolio_snapshot_valuations_snapshot_time` (`snapshot_time`),
+  KEY `idx_portfolio_snapshot_valuations_calculated_at` (`calculated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `ingest_runs` (
   `run_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `run_type` VARCHAR(64) NOT NULL,
