@@ -13,6 +13,8 @@ $steps = [
     ['script' => 'sync_balance_snapshot.php', 'args' => []],
     ['script' => 'sync_active_account_trades.php', 'args' => []],
     ['script' => 'sync_active_market_klines.php', 'args' => ['1m']],
+    ['script' => 'calculate_portfolio_snapshot_valuation.php', 'args' => ['--latest-unvalued']],
+    ['script' => 'calculate_current_portfolio_valuation.php', 'args' => []],
 ];
 
 foreach ($steps as $step) {
