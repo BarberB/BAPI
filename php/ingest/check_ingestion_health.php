@@ -171,7 +171,7 @@ function format_age($seconds)
     return $seconds === null ? 'NA' : ((int) $seconds) . 's';
 }
 
-function load_recent_ingest_activity(mysqli $db, $cutoff)
+function load_recent_ingest_activity(mysqli $db, $windowMinutes)
 {
     $sql = "
         SELECT
@@ -179,11 +179,11 @@ function load_recent_ingest_activity(mysqli $db, $cutoff)
             COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS recent_failed_runs,
             MAX(COALESCE(finished_at, started_at)) AS last_activity_at
         FROM crypto.ingest_runs
-        WHERE COALESCE(finished_at, started_at) >= ?
+        WHERE COALESCE(finished_at, started_at) >= NOW() - INTERVAL ? MINUTE
     ";
 
     $stmt = prepare_statement($db, $sql, 'Failed to load recent ingest activity.');
-    $stmt->bind_param('s', $cutoff);
+    $stmt->bind_param('i', $windowMinutes);
     $stmt->execute();
     $result = $stmt->get_result();
     $row = $result ? $result->fetch_assoc() : null;
@@ -196,7 +196,7 @@ function load_recent_ingest_activity(mysqli $db, $cutoff)
     ];
 }
 
-function load_recent_api_errors(mysqli $db, $cutoff)
+function load_recent_api_errors(mysqli $db, $windowMinutes)
 {
     $sql = "
         SELECT
@@ -204,11 +204,11 @@ function load_recent_api_errors(mysqli $db, $cutoff)
             COUNT(DISTINCT run_id) AS recent_error_runs,
             MAX(created_at) AS last_api_error_at
         FROM crypto.api_errors
-        WHERE created_at >= ?
+        WHERE created_at >= NOW() - INTERVAL ? MINUTE
     ";
 
     $stmt = prepare_statement($db, $sql, 'Failed to load recent API errors.');
-    $stmt->bind_param('s', $cutoff);
+    $stmt->bind_param('i', $windowMinutes);
     $stmt->execute();
     $result = $stmt->get_result();
     $row = $result ? $result->fetch_assoc() : null;
@@ -365,12 +365,9 @@ try {
         fail('Database connection failed.');
     }
 
-    $ingestCutoff = date('Y-m-d H:i:s', (int) floor($nowMs / 1000) - ($apiErrorWindowMinutes * 60));
-    $apiErrorCutoff = $ingestCutoff;
-
     $reasons = [];
 
-    $ingestHealth = load_recent_ingest_activity($db, $ingestCutoff);
+    $ingestHealth = load_recent_ingest_activity($db, $apiErrorWindowMinutes);
     $recentIngestRuns = (int) ($ingestHealth['recent_runs'] ?? 0);
     $recentFailedRuns = (int) ($ingestHealth['recent_failed_runs'] ?? 0);
     $lastIngestAge = format_age(age_seconds_from_timestamp($ingestHealth['last_activity_at'] ?? null));
@@ -478,7 +475,7 @@ try {
         }
     }
 
-    $apiErrors = load_recent_api_errors($db, $apiErrorCutoff);
+    $apiErrors = load_recent_api_errors($db, $apiErrorWindowMinutes);
     $recentApiErrors = (int) ($apiErrors['recent_api_errors'] ?? 0);
     if ($recentApiErrors > 0) {
         $reasons[] = 'recent_api_errors';
